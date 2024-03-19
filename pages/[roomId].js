@@ -16,6 +16,8 @@ import dynamic from "next/dynamic";
 const GaugeChart = dynamic(() => import("react-gauge-chart"), { ssr: false });
 import Highcharts from "highcharts";
 import HighchartsReact from "highcharts-react-official";
+import { db } from "@/config/firebaseConfig";
+import { onValue, ref, set } from "firebase/database";
 
 const Room = () => {
   const socket = useSocket();
@@ -33,28 +35,29 @@ const Room = () => {
   } = usePlayer(myId, roomId, peer);
 
   const [users, setUsers] = useState([]);
+  //
+  const [temperature, setTemperature] = useState(0);
+  const [spo2, setSpo2] = useState(0);
+  const [heartRate, setHeartRate] = useState(0);
+  const [ecg, setECG] = useState([
+    [0, 0],
+    [1, 5],
+  ]);
 
-  const options = {
-    credits: {
-      enabled: false,
-    },
-    series: [
-      {
-        data: [
-          [0, 1],
-          [1, 2],
-          [2, 3],
-          [3, 5],
-          [4, 8],
-          [5, 13],
-          [6, 21],
-          [7, 34],
-          [8, 55],
-          [9, 89],
-        ],
-      },
-    ],
-  };
+  useEffect(() => {
+    const query = ref(db, "health");
+    return onValue(query, (snapshot) => {
+      if (snapshot.exists()) {
+        const res = snapshot.val();
+        console.log(res);
+        setTemperature(res.temperature);
+        setHeartRate(res.beatsPerMinute);
+        setSpo2(res.spo2);
+        const index = ecg[ecg.length - 1][0] + 1;
+        setECG([...ecg, [index, res.ecg]]);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (!socket || !peer || !stream) return;
@@ -162,6 +165,30 @@ const Room = () => {
     }));
   }, [myId, setPlayers, stream]);
 
+  const chartOptions = {
+    title: {
+      text: "ECG",
+    },
+    xAxis: {
+      title: {
+        text: "Time (sec)", // x-axis title
+      },
+    },
+    yAxis: {
+      title: {
+        text: "ECG", // y-axis title
+      },
+    },
+    credits: {
+      enabled: false,
+    },
+    series: [
+      {
+        data: ecg,
+      },
+    ],
+  };
+
   return (
     <div className="w-full h-screen flex overflow-hidden">
       <div className="relative h-screen w-[60%]">
@@ -207,7 +234,7 @@ const Room = () => {
             nrOfLevels={420}
             arcsLength={[0.3, 0.5, 0.2]}
             colors={["#5BE12C", "#F5CD19", "#EA4228"]}
-            percent={0.98}
+            percent={temperature / 100}
             formatTextValue={(val) => val + "°C"}
             arcPadding={0.02}
             textColor=""
@@ -220,7 +247,7 @@ const Room = () => {
             nrOfLevels={420}
             arcsLength={[0.3, 0.5, 0.2]}
             colors={["#5BE12C", "#F5CD19", "#EA4228"]}
-            percent={0.4}
+            percent={heartRate / 100}
             formatTextValue={(val) => val + "°C"}
             arcPadding={0.02}
             textColor=""
@@ -233,7 +260,7 @@ const Room = () => {
             nrOfLevels={420}
             arcsLength={[0.3, 0.5, 0.2]}
             colors={["#5BE12C", "#F5CD19", "#EA4228"]}
-            percent={0.62}
+            percent={spo2 / 100}
             formatTextValue={(val) => val + "°C"}
             arcPadding={0.02}
             textColor=""
@@ -241,7 +268,7 @@ const Room = () => {
           <h3 className="font-semibold text-black">SPO2</h3>
         </div>
         <div className="w-[40vw] mr-1">
-          <HighchartsReact highcharts={Highcharts} options={options} />
+          <HighchartsReact highcharts={Highcharts} options={chartOptions} />
         </div>
       </div>
     </div>
