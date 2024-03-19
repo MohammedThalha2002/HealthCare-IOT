@@ -1,0 +1,251 @@
+import { useEffect, useState } from "react";
+import { cloneDeep } from "lodash";
+
+import { useSocket } from "@/context/socket";
+import usePeer from "@/hooks/usePeer";
+import useMediaStream from "@/hooks/useMediaStream";
+import usePlayer from "@/hooks/usePlayer";
+
+import Player from "@/component/Player";
+import Bottom from "@/component/Bottom";
+import CopySection from "@/component/CopySection";
+
+import styles from "@/styles/room.module.css";
+import { useRouter } from "next/router";
+import dynamic from "next/dynamic";
+const GaugeChart = dynamic(() => import("react-gauge-chart"), { ssr: false });
+import Highcharts from "highcharts";
+import HighchartsReact from "highcharts-react-official";
+
+const Room = () => {
+  const socket = useSocket();
+  const { roomId } = useRouter().query;
+  const { peer, myId } = usePeer();
+  const { stream } = useMediaStream();
+  const {
+    players,
+    setPlayers,
+    playerHighlighted,
+    nonHighlightedPlayers,
+    toggleAudio,
+    toggleVideo,
+    leaveRoom,
+  } = usePlayer(myId, roomId, peer);
+
+  const [users, setUsers] = useState([]);
+
+  const options = {
+    credits: {
+      enabled: false,
+    },
+    series: [
+      {
+        data: [
+          [0, 1],
+          [1, 2],
+          [2, 3],
+          [3, 5],
+          [4, 8],
+          [5, 13],
+          [6, 21],
+          [7, 34],
+          [8, 55],
+          [9, 89],
+        ],
+      },
+    ],
+  };
+
+  useEffect(() => {
+    if (!socket || !peer || !stream) return;
+    const handleUserConnected = (newUser) => {
+      console.log(`user connected in room with userId ${newUser}`);
+
+      const call = peer.call(newUser, stream);
+
+      call.on("stream", (incomingStream) => {
+        console.log(`incoming stream from ${newUser}`);
+        setPlayers((prev) => ({
+          ...prev,
+          [newUser]: {
+            url: incomingStream,
+            muted: true,
+            playing: true,
+          },
+        }));
+
+        setUsers((prev) => ({
+          ...prev,
+          [newUser]: call,
+        }));
+      });
+    };
+    socket.on("user-connected", handleUserConnected);
+
+    return () => {
+      socket.off("user-connected", handleUserConnected);
+    };
+  }, [peer, setPlayers, socket, stream]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleToggleAudio = (userId) => {
+      console.log(`user with id ${userId} toggled audio`);
+      setPlayers((prev) => {
+        const copy = cloneDeep(prev);
+        copy[userId].muted = !copy[userId].muted;
+        return { ...copy };
+      });
+    };
+
+    const handleToggleVideo = (userId) => {
+      console.log(`user with id ${userId} toggled video`);
+      setPlayers((prev) => {
+        const copy = cloneDeep(prev);
+        copy[userId].playing = !copy[userId].playing;
+        return { ...copy };
+      });
+    };
+
+    const handleUserLeave = (userId) => {
+      console.log(`user ${userId} is leaving the room`);
+      users[userId]?.close();
+      const playersCopy = cloneDeep(players);
+      delete playersCopy[userId];
+      setPlayers(playersCopy);
+    };
+    socket.on("user-toggle-audio", handleToggleAudio);
+    socket.on("user-toggle-video", handleToggleVideo);
+    socket.on("user-leave", handleUserLeave);
+    return () => {
+      socket.off("user-toggle-audio", handleToggleAudio);
+      socket.off("user-toggle-video", handleToggleVideo);
+      socket.off("user-leave", handleUserLeave);
+    };
+  }, [players, setPlayers, socket, users]);
+
+  useEffect(() => {
+    if (!peer || !stream) return;
+    peer.on("call", (call) => {
+      const { peer: callerId } = call;
+      call.answer(stream);
+
+      call.on("stream", (incomingStream) => {
+        console.log(`incoming stream from ${callerId}`);
+        setPlayers((prev) => ({
+          ...prev,
+          [callerId]: {
+            url: incomingStream,
+            muted: true,
+            playing: true,
+          },
+        }));
+
+        setUsers((prev) => ({
+          ...prev,
+          [callerId]: call,
+        }));
+      });
+    });
+  }, [peer, setPlayers, stream]);
+
+  useEffect(() => {
+    if (!stream || !myId) return;
+    console.log(`setting my stream ${myId}`);
+    setPlayers((prev) => ({
+      ...prev,
+      [myId]: {
+        url: stream,
+        muted: true,
+        playing: true,
+      },
+    }));
+  }, [myId, setPlayers, stream]);
+
+  return (
+    <div className="w-full h-screen flex overflow-hidden">
+      <div className="relative h-screen w-[60%]">
+        {/* Main Video */}
+        <div className={styles.activePlayerContainer}>
+          {playerHighlighted && (
+            <Player
+              url={playerHighlighted.url}
+              muted={playerHighlighted.muted}
+              playing={playerHighlighted.playing}
+              isActive
+            />
+          )}
+        </div>
+        {/* Other Video */}
+        <div className={styles.inActivePlayerContainer}>
+          {Object.keys(nonHighlightedPlayers).map((playerId) => {
+            const { url, muted, playing } = nonHighlightedPlayers[playerId];
+            return (
+              <Player
+                key={playerId}
+                url={url}
+                muted={muted}
+                playing={playing}
+                isActive={false}
+              />
+            );
+          })}
+        </div>
+        <CopySection roomId={roomId} />
+        <Bottom
+          muted={playerHighlighted?.muted}
+          playing={playerHighlighted?.playing}
+          toggleAudio={toggleAudio}
+          toggleVideo={toggleVideo}
+          leaveRoom={leaveRoom}
+        />
+      </div>
+      <div className="w-[40%] h-screen bg-black flex flex-wrap items-center">
+        <div className="h-[20vh] w-[20vw] mt-4 bg-[#f6f6f6] rounded-md drop-shadow-lg shadow-slate-600 flex flex-col justify-center items-center ">
+          <GaugeChart
+            id="gauge-chart5"
+            nrOfLevels={420}
+            arcsLength={[0.3, 0.5, 0.2]}
+            colors={["#5BE12C", "#F5CD19", "#EA4228"]}
+            percent={0.98}
+            formatTextValue={(val) => val + "°C"}
+            arcPadding={0.02}
+            textColor=""
+          />
+          <h3 className="font-semibold text-black">Temeprature</h3>
+        </div>
+        <div className="h-[20vh] w-[20vw] mt-4 bg-[#f6f6f6] rounded-md drop-shadow-lg shadow-slate-600 flex flex-col justify-center items-center ">
+          <GaugeChart
+            id="gauge-chart5"
+            nrOfLevels={420}
+            arcsLength={[0.3, 0.5, 0.2]}
+            colors={["#5BE12C", "#F5CD19", "#EA4228"]}
+            percent={0.4}
+            formatTextValue={(val) => val + "°C"}
+            arcPadding={0.02}
+            textColor=""
+          />
+          <h3 className="font-semibold text-black">HeartRate</h3>
+        </div>
+        <div className="h-[20vh] w-[20vw] mt-4 bg-[#f6f6f6] rounded-md drop-shadow-lg shadow-slate-600 flex flex-col justify-center items-center ">
+          <GaugeChart
+            id="gauge-chart5"
+            nrOfLevels={420}
+            arcsLength={[0.3, 0.5, 0.2]}
+            colors={["#5BE12C", "#F5CD19", "#EA4228"]}
+            percent={0.62}
+            formatTextValue={(val) => val + "°C"}
+            arcPadding={0.02}
+            textColor=""
+          />
+          <h3 className="font-semibold text-black">SPO2</h3>
+        </div>
+        <div className="w-[40vw] mr-1">
+          <HighchartsReact highcharts={Highcharts} options={options} />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Room;
